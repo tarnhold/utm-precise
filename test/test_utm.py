@@ -10,9 +10,10 @@ class UTMTestCase(unittest.TestCase):
         self.assertEqual(a[2], b[2])
         self.assertEqual(a[3].upper(), b[3].upper())
 
-    def assert_latlon_equal(self, a, b, precision=5):
-        self.assertAlmostEqual(a[0], b[0], precision)
-        self.assertAlmostEqual(a[1], b[1], precision)
+    def assert_latlon_equal(self, a, b, delta=1e-9):
+        # 1e-9 deg is about 0.11 mm at the equator (sub-millimetre).
+        self.assertAlmostEqual(a[0], b[0], delta=delta)
+        self.assertAlmostEqual(a[1], b[1], delta=delta)
 
 class KnownValuesGRS80(UTMTestCase):
     # Known UTM values were projected from latitude and longitude values
@@ -91,7 +92,7 @@ class KnownValuesGRS80(UTMTestCase):
             utmr = UTM.from_latlon(*latlon)
             result = UTM.to_latlon(*utmr[0:3], **utm_kw)
             # we should get the same values as the initial input
-            self.assert_latlon_equal(latlon, result, 5)
+            self.assert_latlon_equal(latlon, result)
 
     def test_to_latlon_roundtrip(self):
         '''to_latlon look how good roundtrip fits'''
@@ -99,9 +100,14 @@ class KnownValuesGRS80(UTMTestCase):
             latlonr = UTM.to_latlon(*utm)
             # disable strict lat/lon range check, because roundtrip
             # of "Latitude 84" is 84.00000000000011... which is outside range
+            # (zone letter is then None; still compare easting/northing)
             result = UTM.from_latlon(*latlonr, strict=False)
-            # we should get the same values as the initial input
-            self.assert_latlon_equal(utm, result, 5)
+            # easting/northing should come back to sub-millimetre (0.1 mm)
+            self.assertAlmostEqual(utm[0], result[0], places=4)
+            self.assertAlmostEqual(utm[1], result[1], places=4)
+            self.assertEqual(utm[2], result[2])
+            if result[3] is not None:
+                self.assertEqual(utm[3].upper(), result[3].upper())
 
 
 class BadInput(UTMTestCase):
@@ -236,6 +242,11 @@ class BadInput(UTMTestCase):
             UTM.OutOfRangeError, UTM.to_latlon, 500000, 5000000, 34, 'X')
         self.assertRaises(
             UTM.OutOfRangeError, UTM.to_latlon, 500000, 5000000, 36, 'X')
+        with self.assertRaises(UTM.OutOfRangeError) as ctx:
+            UTM.to_latlon(500000, 5000000, 32, 'X')
+        self.assertEqual(
+            str(ctx.exception),
+            'zone number not valid (there is no zone 32 in X)')
 
         # valid range
         for i in range(ord('C'), ord('X') + 1):

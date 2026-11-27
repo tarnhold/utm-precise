@@ -1,35 +1,90 @@
 #!/usr/bin/env python
 
-from __future__ import print_function
-
 import argparse
+import sys
+
 import utm
 
-parser = argparse.ArgumentParser(description='Bidirectional UTM-WGS84 converter for python')
-subparsers = parser.add_subparsers()
 
-parser_latlon = subparsers.add_parser('latlon', help='Convert a latitude/longitude pair WGS84 to UTM')
-parser_latlon.add_argument('latitude', type=float, help='Latitude of the WGS84 coordinate')
-parser_latlon.add_argument('longitude', type=float, help='Longitude of the WGS84 coordinate')
+def format_latlon(latitude, longitude):
+    # ~0.01 mm at the equator; enough headroom for the library's sub-mm accuracy
+    return "{:.10f},{:.10f}".format(latitude, longitude)
 
-parser_utm = subparsers.add_parser('utm', help='Convert a UTM coordinate to WGS84')
-parser_utm.add_argument('easting', type=int, help='Easting component of the UTM coordinate')
-parser_utm.add_argument('northing', type=int, help='Northing component of the UTM coordinate')
-parser_utm.add_argument('zone_number', type=int, help='Zone number of the UTM coordinate')
-parser_utm.add_argument('zone_letter', help='Zone letter of the UTM coordinate')
 
-args = parser.parse_args()
+def format_utm(easting, northing, zone_number, zone_letter):
+    # 0.000001 m (micrometre), better than millimetre precision
+    return "{:.6f},{:.6f},{},{}".format(
+        easting, northing, zone_number, zone_letter
+    )
 
-if all(arg in args for arg in ['easting', 'northing', 'zone_number', 'zone_letter']):
-    if args.zone_letter == '':
-        parser_utm.print_usage()
-        print("utm-converter utm: error: too few arguments")
-        exit()
 
-    coordinate = utm.to_latlon(args.easting, args.northing,
-                               args.zone_number, args.zone_letter)
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Bidirectional UTM/GRS80 converter for Python",
+    )
+    subparsers = parser.add_subparsers(
+        dest="command",
+        required=True,
+        metavar="COMMAND",
+        help="Conversion direction",
+    )
 
-elif all(arg in args for arg in ['latitude', 'longitude']):
-    coordinate = utm.from_latlon(args.latitude, args.longitude)
+    parser_latlon = subparsers.add_parser(
+        "latlon",
+        help="Convert a latitude/longitude pair (GRS80) to UTM",
+    )
+    parser_latlon.add_argument(
+        "latitude",
+        type=float,
+        help="Latitude of the GRS80 coordinate (degrees)",
+    )
+    parser_latlon.add_argument(
+        "longitude",
+        type=float,
+        help="Longitude of the GRS80 coordinate (degrees)",
+    )
 
-print(','.join(str(component) for component in coordinate))
+    parser_utm = subparsers.add_parser(
+        "utm",
+        help="Convert a UTM coordinate to latitude/longitude (GRS80)",
+    )
+    parser_utm.add_argument(
+        "easting",
+        type=float,
+        help="Easting component of the UTM coordinate (metres)",
+    )
+    parser_utm.add_argument(
+        "northing",
+        type=float,
+        help="Northing component of the UTM coordinate (metres)",
+    )
+    parser_utm.add_argument(
+        "zone_number",
+        type=int,
+        help="Zone number of the UTM coordinate",
+    )
+    parser_utm.add_argument(
+        "zone_letter",
+        help="Zone letter of the UTM coordinate",
+    )
+
+    args = parser.parse_args(argv)
+
+    if args.command == "utm":
+        latitude, longitude = utm.to_latlon(
+            args.easting, args.northing, args.zone_number, args.zone_letter
+        )
+        print(format_latlon(latitude, longitude))
+    elif args.command == "latlon":
+        easting, northing, zone_number, zone_letter = utm.from_latlon(
+            args.latitude, args.longitude
+        )
+        print(format_utm(easting, northing, zone_number, zone_letter))
+    else:
+        parser.error("unknown command")
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
