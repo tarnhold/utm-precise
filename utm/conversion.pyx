@@ -1,10 +1,7 @@
 # cython: language_level=3, boundscheck=False, wraparound=False
 # cython: cdivision=True, initializedcheck=False
 
-from libc.math cimport (
-    sin, cos, tan, atan, atan2, sinh, cosh, asinh, atanh,
-    sqrt, hypot, exp, fabs, fmax, fmod, M_PI,
-)
+from libc.math cimport sin, cos, tan, sqrt, fmod, M_PI
 
 from cpython cimport array as carray
 import array
@@ -21,58 +18,62 @@ cdef double K0 = 0.9996
 # GRS80
 cdef double R = 6378137.0
 cdef double F = 1.0 / 298.257222101
-# first eccentricity squared (e^2) and first eccentricity e
-cdef double E2 = (2.0 - F) * F
-cdef double ES = sqrt(E2)
-cdef double E2M = 1.0 - E2
+# WGS84
+#cdef double R = 6378137.0
+#cdef double F = 1.0 / 298.257223563
+
+# first numerical eccentricity squared (e^2)
+cdef double E = (2.0 - F) * F
+cdef double E2 = E ** 2
+cdef double E3 = E ** 3
+cdef double E4 = E ** 4
+cdef double E5 = E ** 5
+cdef double E6 = E ** 6
+cdef double E7 = E ** 7
+# second numerical eccentricity squared (e^'2)
+cdef double E_P2 = E / (1.0 - E)
+
 # third flattening n
-cdef double N = F / (2.0 - F)
+cdef double _E = F / (2.0 - F)
+cdef double _E2 = _E ** 2
+cdef double _E3 = _E ** 3
+cdef double _E4 = _E ** 4
+cdef double _E5 = _E ** 5
+cdef double _E6 = _E ** 6
+cdef double _E7 = _E ** 7
 
-# Rectified-meridian scale A = a * b1, with
-# b1 = (1 + n^2/4 + n^4/64 + n^6/256) / (1+n)
-# (Karney 2011 / Poder-Engsager, 6th-order series in n)
-cdef double _n2 = N * N
-cdef double B1 = (_n2 * _n2 * _n2 + 4.0 * _n2 * _n2 + 64.0 * _n2 + 256.0) / (
-    256.0 * (1.0 + N)
-)
-cdef double A = R * B1
-cdef double AK0 = A * K0
+# Meridian distance from latitude
+#
+# Deakin, R. E. (2006): Meridian Distance, School of Mathematical &
+#   Geospatial Sciences, RMIT University, Melbourne, March 2006.
+# Weintritt, A. (2013): So, What is Actually the Distance from the
+#   Equator to the Pole? - Overview of Meridian Distance Approximations,
+#   TransNav the International Journal on Marine Navigation and Safety
+#   of Sea Transportation, Volume 7, Number 2, June 2013.
+# Coefficients through e^14 by Taylor expansion of the meridian
+# integrand and term-by-term integration (sympy).
+cdef double M1 =                  (1 - E / 4 - 3 * E2 / 64 -  5 * E3 / 256 - 175 * E4 / 16384 - 441 * E5 / 65536 - 4851 * E6 / 1048576 - 14157 * E7 / 4194304)
+cdef double M2 =   3. /       8 * (    E +         E2 /  4 + 15 * E3 / 128 +  35 * E4 /   512 + 735 * E5 / 16384 + 2079 * E6 / 65536 + 99099 * E7 / 4194304)
+cdef double M3 =  15. /     256 * (                E2      +  3 * E3 /   4 +  35 * E4 /    64 + 105 * E5 /   256 + 10395 * E6 / 32768 + 33033 * E7 / 131072)
+cdef double M4 =  35. /    3072 * (                               E3       +   5 * E4 /     4 + 315 * E5 /   256 +  1155 * E6 /  1024 + 33033 * E7 / 32768)
+cdef double M5 = 315. /  131072 * (                                                E4         +   7 * E5 /     4 +   693 * E6 /   320 +  3003 * E7 /  1280)
+cdef double M6 = 693. / 1310720 * (                                                               E5              +     9 * E6 /     4 +   429 * E7 /   128)
+cdef double M7 = 1001. / 8388608 * (                                                                              E6                     +    11 * E7 /     4)
+cdef double M8 = 6435. / 234881024 *                                                                                                        E7
 
-# Forward Krueger coefficients alpha[1..6] (Karney 2011, order 6)
-cdef double ALP1 = N * (
-    ((((31564.0 * N - 66675.0) * N + 34440.0) * N + 47250.0) * N - 100800.0) * N
-    + 75600.0
-) / 151200.0
-cdef double ALP2 = _n2 * (
-    (((-1983433.0 * N + 863232.0) * N + 748608.0) * N - 1161216.0) * N + 524160.0
-) / 1935360.0
-cdef double ALP3 = _n2 * N * (
-    ((670412.0 * N + 406647.0) * N - 533952.0) * N + 184464.0
-) / 725760.0
-cdef double ALP4 = _n2 * _n2 * (
-    (6601661.0 * N - 7732800.0) * N + 2230245.0
-) / 7257600.0
-cdef double ALP5 = _n2 * _n2 * N * (-13675556.0 * N + 3438171.0) / 7983360.0
-cdef double ALP6 = _n2 * _n2 * _n2 * 212378941.0 / 319334400.0
-
-# Inverse Krueger coefficients beta[1..6]
-cdef double BET1 = N * (
-    ((((384796.0 * N - 382725.0) * N - 6720.0) * N + 932400.0) * N - 1612800.0) * N
-    + 1209600.0
-) / 2419200.0
-cdef double BET2 = _n2 * (
-    (((-1118711.0 * N + 1695744.0) * N - 1174656.0) * N + 258048.0) * N + 80640.0
-) / 3870720.0
-cdef double BET3 = _n2 * N * (
-    ((22276.0 * N - 16929.0) * N - 15984.0) * N + 12852.0
-) / 362880.0
-cdef double BET4 = _n2 * _n2 * ((-830251.0 * N - 158400.0) * N + 197865.0) / 7257600.0
-cdef double BET5 = _n2 * _n2 * N * (-435388.0 * N + 453717.0) / 15966720.0
-cdef double BET6 = _n2 * _n2 * _n2 * 20648693.0 / 638668800.0
-
-cdef double TAU_TOL = 1.4901161193847657e-9   # sqrt(eps) / 10
-cdef double TAU_MAX = 134217728.0            # 2 / sqrt(eps)
-cdef double ES_ATANH_ES = ES * atanh(ES)
+# Latitude from meridian distance
+#
+# Deakin, R. E. (2012): Great Elliptic Arc Distance, School of Mathematical &
+#   Geospatial Sciences, RMIT University, Melbourne, January 2012.
+# Coefficients through n^7 by Fourier reversion of the meridian
+# series (sympy), reducing to Deakin through n^5.
+cdef double P2 = (   3. /     2 * _E  -  27. /    32 * _E3 + 269. /   512 * _E5 - 6607. / 24576 * _E7)
+cdef double P3 = (  21. /    16 * _E2 -  55. /    32 * _E4 + 6759. /  4096 * _E6)
+cdef double P4 = ( 151. /    96 * _E3 - 417. /   128 * _E5 + 87963. / 20480 * _E7)
+cdef double P5 = (1097. /   512 * _E4 - 15543. / 2560 * _E6)
+cdef double P6 = (8011. /  2560 * _E5 - 69119. / 6144 * _E7)
+cdef double P7 = (293393. / 61440 * _E6)
+cdef double P8 = (6459601. / 860160 * _E7)
 
 ZONE_LETTERS = "CDEFGHJKLMNPQRSTUVWXX"
 
@@ -86,164 +87,156 @@ cdef inline double mod_angle_c(double value) noexcept:
 
 
 cpdef mod_angle(double value):
-    """Returns angle in radians in range [-pi, pi)."""
+    """Returns angle in radians in range [-pi, pi)"""
     return mod_angle_c(value)
-
-
-cdef inline double taupf(double tau) noexcept:
-    """tan(chi) from tan(phi), chi = conformal latitude (Karney)."""
-    cdef double tau1 = hypot(1.0, tau)
-    cdef double sig = sinh(ES * atanh(ES * tau / tau1))
-    return hypot(1.0, sig) * tau - sig * tau1
-
-
-cdef inline double tauf(double taup) noexcept:
-    """tan(phi) from tan(chi) by Newton's method (Karney)."""
-    cdef double tau, taupa, dtau, stol
-    cdef int i
-    if fabs(taup) > 70.0:
-        tau = taup * exp(ES_ATANH_ES)
-    else:
-        tau = taup / E2M
-    if not (fabs(tau) < TAU_MAX):
-        return tau
-    stol = TAU_TOL * fmax(1.0, fabs(taup))
-    for i in range(8):
-        taupa = taupf(tau)
-        dtau = (taup - taupa) * (1.0 + E2M * tau * tau) / (
-            E2M * hypot(1.0, tau) * hypot(1.0, taupa)
-        )
-        tau += dtau
-        if fabs(dtau) < stol:
-            break
-    return tau
 
 
 cdef void tm_forward(double lat_rad, double dlon, double *x, double *y) noexcept:
     """Transverse Mercator forward (metres from CM / equator, no false offsets)."""
-    cdef double tau, taup, c_lam, s_lam, xi_p, eta_p, xi, eta
-    cdef double s2, s4, s6, s8, s10, s12
-    cdef double c2, c4, c6, c8, c10, c12
-    cdef double sh2, sh4, sh6, sh8, sh10, sh12
-    cdef double ch2, ch4, ch6, ch8, ch10, ch12
+    cdef double lat_tan, lat_tan2, lat_tan4, lat_tan6, lat_tan8
+    cdef double n, c, c2, c3, c4, c5, c6, c7, c8
+    cdef double a, a2, a3, a4, a5, a6, a7, a8, a9, a10
+    cdef double m
 
-    tau = tan(lat_rad)
-    taup = taupf(tau)
-    c_lam = cos(dlon)
-    s_lam = sin(dlon)
-    xi_p = atan2(taup, c_lam)
-    eta_p = asinh(s_lam / sqrt(taup * taup + c_lam * c_lam))
+    lat_tan = tan(lat_rad)
+    lat_tan2 = lat_tan ** 2
+    lat_tan4 = lat_tan ** 4
+    lat_tan6 = lat_tan ** 6
+    lat_tan8 = lat_tan ** 8
 
-    s2 = sin(2.0 * xi_p)
-    c2 = cos(2.0 * xi_p)
-    # Chebyshev recurrence: sin((k+1)th) = 2 cos(2ξ') sin(kth) - sin((k-1)th)
-    s4 = 2.0 * c2 * s2
-    c4 = 2.0 * c2 * c2 - 1.0
-    s6 = 2.0 * c2 * s4 - s2
-    c6 = 2.0 * c2 * c4 - c2
-    s8 = 2.0 * c2 * s6 - s4
-    c8 = 2.0 * c2 * c6 - c4
-    s10 = 2.0 * c2 * s8 - s6
-    c10 = 2.0 * c2 * c8 - c6
-    s12 = 2.0 * c2 * s10 - s8
-    c12 = 2.0 * c2 * c10 - c8
+    # Normalkruemmungsradius
+    n = R / sqrt(1 - E * sin(lat_rad) ** 2)
+    c = E_P2 * cos(lat_rad) ** 2
+    c2 = c ** 2
+    c3 = c ** 3
+    c4 = c ** 4
+    c5 = c ** 5
+    c6 = c ** 6
+    c7 = c ** 7
+    c8 = c ** 8
 
-    sh2 = sinh(2.0 * eta_p)
-    ch2 = cosh(2.0 * eta_p)
-    sh4 = 2.0 * ch2 * sh2
-    ch4 = 2.0 * ch2 * ch2 - 1.0
-    sh6 = 2.0 * ch2 * sh4 - sh2
-    ch6 = 2.0 * ch2 * ch4 - ch2
-    sh8 = 2.0 * ch2 * sh6 - sh4
-    ch8 = 2.0 * ch2 * ch6 - ch4
-    sh10 = 2.0 * ch2 * sh8 - sh6
-    ch10 = 2.0 * ch2 * ch8 - ch6
-    sh12 = 2.0 * ch2 * sh10 - sh8
-    ch12 = 2.0 * ch2 * ch10 - ch8
+    a = cos(lat_rad) * dlon
+    a2 = a ** 2
+    a3 = a ** 3
+    a4 = a ** 4
+    a5 = a ** 5
+    a6 = a ** 6
+    a7 = a ** 7
+    a8 = a ** 8
+    a9 = a ** 9
+    a10 = a ** 10
 
-    xi = (xi_p
-          + ALP1 * s2 * ch2
-          + ALP2 * s4 * ch4
-          + ALP3 * s6 * ch6
-          + ALP4 * s8 * ch8
-          + ALP5 * s10 * ch10
-          + ALP6 * s12 * ch12)
-    eta = (eta_p
-           + ALP1 * c2 * sh2
-           + ALP2 * c4 * sh4
-           + ALP3 * c6 * sh6
-           + ALP4 * c8 * sh8
-           + ALP5 * c10 * sh10
-           + ALP6 * c12 * sh12)
-    x[0] = AK0 * eta
-    y[0] = AK0 * xi
+    # meridian distance from latitude
+    m = R * (M1 * lat_rad -
+             M2 * sin(2 * lat_rad) +
+             M3 * sin(4 * lat_rad) -
+             M4 * sin(6 * lat_rad) +
+             M5 * sin(8 * lat_rad) -
+             M6 * sin(10 * lat_rad) +
+             M7 * sin(12 * lat_rad) -
+             M8 * sin(14 * lat_rad))
+
+    # Kelly, Kevin M. (1986): Coordinate Transformations - Universal
+    #    Transverse Mercator/Geographic. Ontario Ministry of Natural
+    #    Resources. March 1986.
+    # Snyder, John P. (1987): Map Projections - A Working Manual, U.S.
+    #   Geological Survey Professional Paper 1395, p.60ff, Washington.
+    # Hofmann-Wellenhof, B.; Kienast, G.; Lichtenegger, H. (1994): GPS in der
+    #    Praxis, Springer-Verlag Wien New York, p.97ff, Wien.
+    # Terms through a^10, and the O(e'^2) parts of a^7 and a^8 omitted
+    # in those sources, by Taylor expansion of the complex meridian
+    # mapping F(psi + i*lambda) (sympy).
+    x[0] = K0 * n * (
+                        a +
+                        a3 / 6 * (1 - lat_tan2 + c) +
+                        a5 / 120 * (5 - 18 * lat_tan2 + lat_tan4 + 14 * c + 13 * c2 + 4 * c3 - 58 * c * lat_tan2 - 64 * c2 * lat_tan2 - 24 * lat_tan2 * c3) +
+                        a7 / 5040 * (61 - 479 * lat_tan2 + 179 * lat_tan4 - lat_tan6 + 331 * c + 715 * c2 + 769 * c3 + 412 * c4 + 88 * c5 - 3298 * c * lat_tan2 - 8655 * c2 * lat_tan2 - 10964 * c3 * lat_tan2 - 6760 * c4 * lat_tan2 - 1632 * c5 * lat_tan2 + 1771 * c * lat_tan4 + 6080 * c2 * lat_tan4 + 9480 * c3 * lat_tan4 + 6912 * c4 * lat_tan4 + 1920 * c5 * lat_tan4) +
+                        a9 / 362880 * (1385 - 19028 * lat_tan2 + 18270 * lat_tan4 - 1636 * lat_tan6 + lat_tan8 + 12284 * c + 45318 * c2 + 90804 * c3 + 107241 * c4 + 74904 * c5 + 28720 * c6 + 4672 * c7 - 214140 * c * lat_tan2 - 951468 * c2 * lat_tan2 - 2220708 * c3 * lat_tan2 - 2984976 * c4 * lat_tan2 - 2332848 * c5 * lat_tan2 - 987904 * c6 * lat_tan2 - 175680 * c7 * lat_tan2 + 290868 * c * lat_tan4 + 1652910 * c2 * lat_tan4 + 4662840 * c3 * lat_tan4 + 7309344 * c4 * lat_tan4 + 6500736 * c5 * lat_tan4 + 3077568 * c6 * lat_tan4 + 603648 * c7 * lat_tan4 - 47188 * c * lat_tan6 - 384384 * c2 * lat_tan6 - 1394064 * c3 * lat_tan6 - 2644992 * c4 * lat_tan6 - 2741760 * c5 * lat_tan6 - 1474560 * c6 * lat_tan6 - 322560 * c7 * lat_tan6)
+                        )
+
+    y[0] = K0 * (m + n * lat_tan * (
+                                        a2 / 2 +
+                                        a4 / 24 * (5 - lat_tan2 + 9 * c + 4 * c2) +
+                                        a6 / 720 * (61 - 58 * lat_tan2 + lat_tan4 + 270 * c + 445 * c2 + 324 * c3 + 88 * c4 - 330 * c * lat_tan2 - 680 * lat_tan2 * c2 - 600 * lat_tan2 * c3 - 192 * lat_tan2 * c4) +
+                                        a8 / 40320 * (1385 - 3111 * lat_tan2 + 543 * lat_tan4 - lat_tan6 + 10899 * c + 34419 * c2 + 56385 * c3 + 50856 * c4 + 24048 * c5 + 4672 * c6 - 32802 * c * lat_tan2 - 129087 * c2 * lat_tan2 - 252084 * c3 * lat_tan2 - 263088 * c4 * lat_tan2 - 140928 * c5 * lat_tan2 - 30528 * c6 * lat_tan2 + 9219 * c * lat_tan4 + 49644 * c2 * lat_tan4 + 121800 * c3 * lat_tan4 + 151872 * c4 * lat_tan4 + 94080 * c5 * lat_tan4 + 23040 * c6 * lat_tan4) +
+                                        a10 / 3628800 * (50521 - 206276 * lat_tan2 + 101166 * lat_tan4 - 4916 * lat_tan6 + lat_tan8 + 612540 * c + 3043190 * c2 + 8250228 * c3 + 13505721 * c4 + 13774680 * c5 + 8592896 * c6 + 3009024 * c7 + 454144 * c8 - 3277980 * c * lat_tan2 - 19954380 * c2 * lat_tan2 - 63646884 * c3 * lat_tan2 - 119311872 * c4 * lat_tan2 - 136688400 * c5 * lat_tan2 - 94408960 * c6 * lat_tan2 - 36196416 * c7 * lat_tan2 - 5928192 * c8 * lat_tan2 + 2402100 * c * lat_tan4 + 19210830 * c2 * lat_tan4 + 75185208 * c3 * lat_tan4 + 165884208 * c4 * lat_tan4 + 217543680 * c5 * lat_tan4 + 168626880 * c6 * lat_tan4 + 71493120 * c7 * lat_tan4 + 12801024 * c8 * lat_tan4 - 239220 * c * lat_tan6 - 2879440 * c2 * lat_tan6 - 14852880 * c3 * lat_tan6 - 40247424 * c4 * lat_tan6 - 62092800 * c5 * lat_tan6 - 55019520 * c6 * lat_tan6 - 26127360 * c7 * lat_tan6 - 5160960 * c8 * lat_tan6)
+                                        ))
 
 
 cdef void tm_reverse(double x, double y, double *lat_rad, double *dlon) noexcept:
     """Transverse Mercator inverse (metres from CM / equator, no false offsets)."""
-    cdef double xi, eta, xi_p, eta_p, s, c, r, taup
-    cdef double s2, s4, s6, s8, s10, s12
-    cdef double c2, c4, c6, c8, c10, c12
-    cdef double sh2, sh4, sh6, sh8, sh10, sh12
-    cdef double ch2, ch4, ch6, ch8, ch10, ch12
+    cdef double m, mu, p_rad
+    cdef double p_sin2, p_cos, p_tan, p_tan2, p_tan4, p_tan6, p_tan8
+    cdef double n, r, c, c2, c3, c4, c5, c6, c7, c8
+    cdef double d, d2, d3, d4, d5, d6, d7, d8, d9, d10
 
-    xi = y / AK0
-    eta = x / AK0
+    m = y / K0
+    mu = m / (R * M1)
 
-    s2 = sin(2.0 * xi)
-    c2 = cos(2.0 * xi)
-    s4 = 2.0 * c2 * s2
-    c4 = 2.0 * c2 * c2 - 1.0
-    s6 = 2.0 * c2 * s4 - s2
-    c6 = 2.0 * c2 * c4 - c2
-    s8 = 2.0 * c2 * s6 - s4
-    c8 = 2.0 * c2 * c6 - c4
-    s10 = 2.0 * c2 * s8 - s6
-    c10 = 2.0 * c2 * c8 - c6
-    s12 = 2.0 * c2 * s10 - s8
-    c12 = 2.0 * c2 * c10 - c8
+    # meridian distance to latitude
+    p_rad = (mu +
+             P2 * sin(2 * mu) +
+             P3 * sin(4 * mu) +
+             P4 * sin(6 * mu) +
+             P5 * sin(8 * mu) +
+             P6 * sin(10 * mu) +
+             P7 * sin(12 * mu) +
+             P8 * sin(14 * mu))
 
-    sh2 = sinh(2.0 * eta)
-    ch2 = cosh(2.0 * eta)
-    sh4 = 2.0 * ch2 * sh2
-    ch4 = 2.0 * ch2 * ch2 - 1.0
-    sh6 = 2.0 * ch2 * sh4 - sh2
-    ch6 = 2.0 * ch2 * ch4 - ch2
-    sh8 = 2.0 * ch2 * sh6 - sh4
-    ch8 = 2.0 * ch2 * ch6 - ch4
-    sh10 = 2.0 * ch2 * sh8 - sh6
-    ch10 = 2.0 * ch2 * ch8 - ch6
-    sh12 = 2.0 * ch2 * sh10 - sh8
-    ch12 = 2.0 * ch2 * ch10 - ch8
+    p_sin2 = sin(p_rad) ** 2
+    p_cos = cos(p_rad)
 
-    xi_p = (xi
-            - BET1 * s2 * ch2
-            - BET2 * s4 * ch4
-            - BET3 * s6 * ch6
-            - BET4 * s8 * ch8
-            - BET5 * s10 * ch10
-            - BET6 * s12 * ch12)
-    eta_p = (eta
-             - BET1 * c2 * sh2
-             - BET2 * c4 * sh4
-             - BET3 * c6 * sh6
-             - BET4 * c8 * sh8
-             - BET5 * c10 * sh10
-             - BET6 * c12 * sh12)
+    p_tan = tan(p_rad)
+    p_tan2 = p_tan ** 2
+    p_tan4 = p_tan ** 4
+    p_tan6 = p_tan ** 6
+    p_tan8 = p_tan ** 8
 
-    s = sinh(eta_p)
-    c = cos(xi_p)
-    r = hypot(s, c)
-    dlon[0] = atan2(s, c)
-    if r == 0.0:
-        lat_rad[0] = M_PI / 2.0 if xi_p >= 0.0 else -M_PI / 2.0
-        return
-    taup = sin(xi_p) / r
-    lat_rad[0] = atan(tauf(taup))
+    n = R / sqrt(1 - E * p_sin2)
+    r = (1 - E) / (1 - E * p_sin2)
 
+    c = E_P2 * p_cos ** 2
+    c2 = c ** 2
+    c3 = c ** 3
+    c4 = c ** 4
+    c5 = c ** 5
+    c6 = c ** 6
+    c7 = c ** 7
+    c8 = c ** 8
 
-cdef inline int zone_cm_deg(int zone_number) noexcept:
-    return (zone_number - 1) * 6 - 180 + 3
+    d = x / (n * K0)
+    d2 = d ** 2
+    d3 = d ** 3
+    d4 = d ** 4
+    d5 = d ** 5
+    d6 = d ** 6
+    d7 = d ** 7
+    d8 = d ** 8
+    d9 = d ** 9
+    d10 = d ** 10
+
+    # Kelly, Kevin M. (1986): Coordinate Transformations - Universal
+    #   Transverse Mercator/Geographic. Ontario Ministry of Natural
+    #   Resources. March 1986.
+    # Snyder, John P. (1987): Map Projections - A Working Manual, U.S.
+    #   Geological Survey Professional Paper 1395, p.60ff, Washington.
+    # Hofmann-Wellenhof, B.; Kienast, G.; Lichtenegger, H. (1994): GPS in der
+    #   Praxis, Springer-Verlag Wien New York, p.97ff, Wien.
+    # Inverse series through d^10 by reversion of the forward mapping
+    # (sympy), including the O(e'^2) parts of d^7 and d^8 omitted in
+    # those sources.
+    lat_rad[0] = (p_rad - (p_tan / r) *
+                (d2 / 2 -
+                 d4 / 24 * (5 + 3 * p_tan2 + c - 4 * c2 - 9 * p_tan2 * c) +
+                 d6 / 720 * (61 + 90 * p_tan2 + 45 * p_tan4 + 46 * c - 3 * c2 + 100 * c3 + 88 * c4 - 252 * p_tan2 * c - 66 * p_tan2 * c2 + 84 * p_tan2 * c3 - 192 * p_tan2 * c4 - 90 * p_tan4 * c + 225 * p_tan4 * c2) -
+                 d8 / 40320 * (1385 + 3633 * p_tan2 + 4095 * p_tan4 + 1575 * p_tan6 + 1731 * c - 573 * c2 - 2927 * c3 - 8808 * c4 - 11472 * c5 - 4672 * c6 - 9381 * p_tan2 * c - 8445 * p_tan2 * c2 + 9609 * p_tan2 * c3 + 19392 * p_tan2 * c4 + 44880 * p_tan2 * c5 + 30528 * p_tan2 * c6 - 7371 * p_tan4 * c + 20325 * p_tan4 * c2 + 10551 * p_tan4 * c3 - 7032 * p_tan4 * c4 - 8832 * p_tan4 * c5 - 23040 * p_tan4 * c6 - 2835 * p_tan6 * c + 4725 * p_tan6 * c2 - 11025 * p_tan6 * c3) +
+                 d10 / 3628800 * (50521 + 204180 * p_tan2 + 383670 * p_tan4 + 321300 * p_tan6 + 99225 * p_tan8 + 88412 * c + 8950 * c2 + 47924 * c3 + 556345 * c4 + 1659896 * c5 + 2428672 * c6 + 1702400 * c7 + 454144 * c8 - 468864 * p_tan2 * c - 796176 * p_tan2 * c2 + 233688 * p_tan2 * c3 - 1648260 * p_tan2 * c4 - 8916120 * p_tan2 * c5 - 18142464 * p_tan2 * c6 - 17159616 * p_tan2 * c7 - 5928192 * p_tan2 * c8 - 595080 * p_tan4 * c + 1769004 * p_tan4 * c2 + 1726704 * p_tan4 * c3 - 1743570 * p_tan4 * c4 + 3306600 * p_tan4 * c5 + 16450560 * p_tan4 * c6 + 25222464 * p_tan4 * c7 + 12801024 * p_tan4 * c8 - 514080 * p_tan6 * c + 868320 * p_tan6 * c2 - 2228760 * p_tan6 * c3 - 1065780 * p_tan6 * c4 + 1242360 * p_tan6 * c5 - 1739520 * p_tan6 * c6 - 5276160 * p_tan6 * c7 - 5160960 * p_tan6 * c8 - 170100 * p_tan8 * c + 255150 * p_tan8 * c2 - 396900 * p_tan8 * c3 + 893025 * p_tan8 * c4)))
+
+    dlon[0] = (d -
+                 d3 / 6 * (1 + 2 * p_tan2 + c) +
+                 d5 / 120 * (5 + 28 * p_tan2 + 24 * p_tan4 + 6 * c - 3 * c2 - 4 * c3 + 8 * p_tan2 * c + 4 * p_tan2 * c2 + 24 * p_tan2 * c3) -
+                 d7 / 5040 * (61 + 662 * p_tan2 + 1320 * p_tan4 + 720 * p_tan6 + 107 * c + 43 * c2 + 97 * c3 + 188 * c4 + 88 * c5 + 440 * p_tan2 * c - 234 * p_tan2 * c2 - 772 * p_tan2 * c3 - 2392 * p_tan2 * c4 - 1632 * p_tan2 * c5 + 336 * p_tan4 * c - 192 * p_tan4 * c2 + 408 * p_tan4 * c3 + 1536 * p_tan4 * c4 + 1920 * p_tan4 * c5) +
+                 d9 / 362880 * (1385 + 24568 * p_tan2 + 83664 * p_tan4 + 100800 * p_tan6 + 40320 * p_tan8 + 3116 * c + 1158 * c2 - 3500 * c3 - 11735 * c4 - 20280 * c5 - 16144 * c6 - 4672 * c7 + 26736 * p_tan2 * c - 4944 * p_tan2 * c2 + 27104 * p_tan2 * c3 + 185496 * p_tan2 * c4 + 459312 * p_tan2 * c5 + 483712 * p_tan2 * c6 + 175680 * p_tan2 * c7 + 47808 * p_tan4 * c - 20736 * p_tan4 * c2 + 576 * p_tan4 * c3 - 195984 * p_tan4 * c4 - 817344 * p_tan4 * c5 - 1239552 * p_tan4 * c6 - 603648 * p_tan4 * c7 + 24192 * p_tan6 * c - 13824 * p_tan6 * c2 + 9216 * p_tan6 * c3 + 9792 * p_tan6 * c4 + 178560 * p_tan6 * c5 + 437760 * p_tan6 * c6 + 322560 * p_tan6 * c7)) / p_cos
 
 
 def latitude_to_zone_letter(double latitude):
@@ -271,7 +264,7 @@ def latlon_to_zone_number(double latitude, double longitude):
 
 
 def zone_number_to_central_longitude(int zone_number):
-    return zone_cm_deg(zone_number)
+    return (zone_number - 1) * 6 - 180 + 3
 
 
 cdef inline bint _is_scalar(object value):
@@ -300,19 +293,28 @@ cdef object _maybe_numpy_array(object sample, object seq, object dtype=None):
 
 
 def from_latlon(latitude, longitude, force_zone_number=None, strict=True):
-    """Convert latitude and longitude (GRS80, degrees) to UTM.
+    """This function convert Latitude and Longitude to UTM coordinate
 
-    Parameters
-    ----------
-    latitude, longitude : float or array-like
-        Geodetic coordinates in degrees. Longitude in [-180, 180).
-        Array-like inputs (lists or NumPy arrays) are converted element-wise.
-        NumPy is optional; arrays work without it and return lists, or
-        ndarrays if a NumPy array was passed in.
-    force_zone_number : int or array-like, optional
-        Force conversion into this UTM zone.
-    strict : bool
-        If True (default), reject latitudes outside 80°S–84°N.
+        Parameters
+        ----------
+        latitude: float or array-like
+            Latitude between 80 deg S and 84 deg N, e.g. [-80.0 to 84.0]
+
+        longitude: float or array-like
+            Longitude between 180 deg W and 180 deg E, e.g. [-180.0 to 180.0).
+            Array-like inputs (lists or NumPy arrays) are converted element-wise.
+            NumPy is optional; arrays work without it and return lists, or
+            ndarrays if a NumPy array was passed in.
+
+        force_zone number: int or array-like
+            Zone Number is represented with global map numbers of an UTM Zone
+            Numbers Map. You may force conversion including one UTM Zone Number.
+            More information see utmzones [1]_
+
+        strict: bool
+            Check for valid latitude and longitude value. Default is True.
+
+       .. _[1]: http://www.jaworski.ca/utmzones.htm
     """
     # Fast path for the usual scalar call (avoid array-detection overhead).
     if isinstance(latitude, (int, float)) and isinstance(longitude, (int, float)):
@@ -331,13 +333,11 @@ cdef tuple _from_latlon_scalar(double latitude, double longitude,
 
     if strict:
         if not -80.0 <= latitude <= 84.0:
-            raise OutOfRangeError(
-                'latitude out of range (must be between 80 deg S and 84 deg N)'
-            )
+            raise OutOfRangeError('latitude out of range (must be between 80 deg S and 84 deg N)')
+    # in any case we have to be strict with longitude, because we calculate
+    # zone_number from it
     if not -180.0 <= longitude < 180.0:
-        raise OutOfRangeError(
-            'longitude out of range (must be between 180 deg W and 180 deg E)'
-        )
+        raise OutOfRangeError('longitude out of range (must be between 180 deg W and 180 deg E)')
 
     if force_zone_number is None:
         zone_number = latlon_to_zone_number(latitude, longitude)
@@ -348,7 +348,8 @@ cdef tuple _from_latlon_scalar(double latitude, double longitude,
         raise OutOfRangeError('zone number out of range (must be between 1 and 60)')
 
     zone_letter = latitude_to_zone_letter(latitude)
-    dlon = mod_angle_c(deg2rad * (longitude - zone_cm_deg(zone_number)))
+
+    dlon = mod_angle_c(deg2rad * (longitude - zone_number_to_central_longitude(zone_number)))
     tm_forward(deg2rad * latitude, dlon, &x, &y)
     x += 500000.0
     if latitude < 0.0:
@@ -435,7 +436,7 @@ def _from_latlon_array(latitude, longitude, force_zone_number, strict):
                 raise OutOfRangeError(
                     'zone number out of range (must be between 1 and 60)'
                 )
-        dlon = mod_angle_c(deg2rad * (lon - zone_cm_deg(zone_number)))
+        dlon = mod_angle_c(deg2rad * (lon - zone_number_to_central_longitude(zone_number)))
         tm_forward(deg2rad * lat, dlon, &x, &y)
         x += 500000.0
         if lat < 0.0:
@@ -456,21 +457,33 @@ def _from_latlon_array(latitude, longitude, force_zone_number, strict):
 
 def to_latlon(easting, northing, zone_number, zone_letter=None, northern=None,
               strict=True):
-    """Convert a UTM coordinate to latitude and longitude (GRS80, degrees).
+    """This function convert an UTM coordinate into Latitude and Longitude
 
-    Parameters
-    ----------
-    easting, northing : float or array-like
-        UTM coordinates in metres. Array-like inputs are converted
-        element-wise. NumPy is optional.
-    zone_number : int or array-like
-        UTM zone number (1–60).
-    zone_letter : str, optional
-        UTM zone letter. Either this or ``northern`` must be given.
-    northern : bool, optional
-        True for the northern hemisphere, False for the southern.
-    strict : bool
-        If True (default), reject easting/northing outside the usual UTM range.
+        Parameters
+        ----------
+        easting: int or array-like
+            Easting value of UTM coordinate
+
+        northing: int or array-like
+            Northing value of UTM coordinate
+            Array-like inputs are converted element-wise. NumPy is optional.
+
+        zone number: int or array-like
+            Zone Number is represented with global map numbers of an UTM Zone
+            Numbers Map. More information see utmzones [1]_
+
+        zone_letter: str
+            Zone Letter can be represented as string values. Where UTM Zone
+            Designators can be accessed in [1]_
+
+        northern: bool
+            You can set True or False to set this parameter. Default is None
+
+        strict: bool
+            Check for valid easting and northing value. Default is True.
+
+       .. _[1]: http://www.jaworski.ca/utmzones.htm
+
     """
     if zone_letter is None:
         letter_missing = True
@@ -503,19 +516,14 @@ def to_latlon(easting, northing, zone_number, zone_letter=None, northern=None,
 
 cdef tuple _to_latlon_scalar(double easting, double northing, int zone_number,
                              object zone_letter, object northern, bint strict):
-    cdef double x, y, lat, dlon, lon0
-    cdef bint north
+    cdef double x, y, lat, dlon
 
     north = _hemisphere(zone_letter, northern, zone_number)
     if strict:
         if not 100000.0 <= easting < 1000000.0:
-            raise OutOfRangeError(
-                'easting out of range (must be between 100.000 m and 999.999 m)'
-            )
+            raise OutOfRangeError('easting out of range (must be between 100.000 m and 999.999 m)')
         if not 0.0 <= northing <= 10000000.0:
-            raise OutOfRangeError(
-                'northing out of range (must be between 0 m and 10.000.000 m)'
-            )
+            raise OutOfRangeError('northing out of range (must be between 0 m and 10.000.000 m)')
     if not 1 <= zone_number <= 60:
         raise OutOfRangeError('zone number out of range (must be between 1 and 60)')
 
@@ -524,21 +532,19 @@ cdef tuple _to_latlon_scalar(double easting, double northing, int zone_number,
     if not north:
         y -= 10000000.0
     tm_reverse(x, y, &lat, &dlon)
-    lon0 = deg2rad * zone_cm_deg(zone_number)
-    return rad2deg * lat, rad2deg * mod_angle_c(dlon + lon0)
+    dlon = mod_angle_c(dlon + deg2rad * zone_number_to_central_longitude(zone_number))
+    return (rad2deg * lat, rad2deg * dlon)
 
 
 cdef bint _hemisphere(object zone_letter, object northern, int zone_number):
-    if zone_letter:
+    if zone_letter is not None and zone_letter != '':
         zone_letter = zone_letter.upper()
         if len(zone_letter) > 1:
             raise OutOfRangeError('zone letter out of range (must be one character)')
         if not 'C' <= zone_letter <= 'X' or zone_letter in ['I', 'O']:
             raise OutOfRangeError('zone letter out of range (must be between C and X)')
         if zone_letter == 'X' and zone_number in [32, 34, 36]:
-            raise OutOfRangeError(
-                'zone number not valid (there is no zone ' + str(zone_number) + ' in X)'
-            )
+            raise OutOfRangeError('zone number not valid (there is no zone ' + str(zone_number) + ' in X)')
         return zone_letter >= 'N'
     return bool(northern)
 
@@ -609,10 +615,12 @@ def _to_latlon_array(easting, northing, zone_number, zone_letter, northern, stri
             y -= 10000000.0
         tm_reverse(x, y, &lat, &dlon)
         lat_v[i] = rad2deg * lat
-        lon_v[i] = rad2deg * mod_angle_c(dlon + deg2rad * zone_cm_deg(zone))
+        lon_v[i] = rad2deg * mod_angle_c(dlon + deg2rad * zone_number_to_central_longitude(zone))
 
     sample = easting if getattr(easting, "ndim", None) is not None else northing
     return (
         _maybe_numpy_array(sample, lat_arr),
         _maybe_numpy_array(sample, lon_arr),
     )
+
+# vim: tabstop=8 expandtab shiftwidth=4 softtabstop=4
