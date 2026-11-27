@@ -37,6 +37,10 @@ requires-python = ">=3.10"
 Homepage = "https://github.com/tarnhold/utm-precise"
 Repository = "https://github.com/tarnhold/utm-precise"
 
+
+[project.optional-dependencies]
+numpy = ["numpy"]
+
 [tool.setuptools]
 packages = ["utm"]
 
